@@ -54,55 +54,30 @@ apps/worker  Cloudflare Worker
              Cron: 毎分
 ```
 
-## デプロイ
+## デプロイ（Discord-Bot-Factory）
 
-### Bot-Factory を使う場合
+トークン・鍵の管理とデプロイは **Discord-Bot-Factory** で行います。
+このリポジトリ自身にはデプロイ用ワークフローを置いていません（二重デプロイ防止）。
 
-リポジトリ直下の `bot-factory.json` を Bot-Factory が読み取ります。
-Worker名は `c4sino-admin` です。
+1. Factory管理サイトのリポジトリ一覧から `Discord-C4sino-admin` を選ぶ
+   （`bot-factory.json` を自動で読み込みます）
+2. Cloudflareアカウントを選び、表示された項目を入力する
+   - `DISCORD_BOT_TOKEN` / `DISCORD_APPLICATION_ID` / `DISCORD_PUBLIC_KEY` / `DISCORD_CLIENT_SECRET`
+   - `DASHBOARD_PASSWORD`（管理サイトのログイン用）
+   - `SESSION_ENCRYPTION_KEY` は Factory が自動生成・暗号化保存し、再デプロイ時も同じ値を再利用
+   - `WEB_PUBLIC_URL` は任意（独自ドメイン時のみ）
+3. Intents・権限・ロール順のチェックを確認してデプロイ
 
-`wrangler.jsonc` の `build.command` で管理サイトを毎回ビルドしてから、Workerと一緒にデプロイします。
+Factory の処理内容:
 
-### GitHub Actions を使う場合
+- `npm ci` → `wrangler deploy --name c4sino-admin`（Worker Secret も同時に登録）
+- `wrangler.jsonc` の `build.command` により管理サイト（apps/web）をビルドして同じWorkerに同梱
+- D1 `c4sino-admin-db` を初回に自動作成し、IDを `wrangler.jsonc` に書き戻してコミット
+- `apps/worker/schema.sql` をD1へ適用
 
-`.github/workflows/deploy-worker.yml` が main への push でデプロイします。
+### デプロイ後（初回のみ）
 
-Repository Secrets に次を設定してください。
-
-- `CLOUDFLARE_API_TOKEN`
-- `CLOUDFLARE_ACCOUNT_ID`
-
-### 手動の場合
-
-```bash
-npm ci
-cd apps/worker
-npx wrangler deploy
-```
-
-### D1
-
-`wrangler.jsonc` には `database_id` を書いていません。
-初回デプロイ時に wrangler が `c4sino-admin-db` を自動作成してバインドします。
-スキーマはWorkerが起動時に自動作成します（`apps/worker/schema.sql` も同じ内容です）。
-
-### Worker Secret
-
-```bash
-cd apps/worker
-npx wrangler secret put DISCORD_APPLICATION_ID
-npx wrangler secret put DISCORD_PUBLIC_KEY
-npx wrangler secret put DISCORD_BOT_TOKEN
-npx wrangler secret put DISCORD_CLIENT_SECRET
-npx wrangler secret put SESSION_ENCRYPTION_KEY   # 32バイトのランダム値(base64)。作成後は変更しない
-npx wrangler secret put DASHBOARD_PASSWORD
-```
-
-任意: `WEB_PUBLIC_URL`（独自ドメインで管理サイトを出す場合のみ。未設定ならWorker自身のURL）
-
-### Discord Developer Portal
-
-デプロイ後に発行されたWorker URLで設定します。
+発行されたWorker URLで Discord Developer Portal を設定します。Worker の再デプロイは不要です。
 
 - Interactions Endpoint URL: `https://<Worker URL>/interactions`
 - OAuth2 Redirect: `https://<Worker URL>/auth/discord/callback`
@@ -110,6 +85,7 @@ npx wrangler secret put DASHBOARD_PASSWORD
 - Message Content Intent: ON
 
 管理サイト: `https://<Worker URL>/`
+ヘルスチェック: `https://<Worker URL>/health`
 
 ## 必須Discord設定
 

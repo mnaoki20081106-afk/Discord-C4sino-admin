@@ -97,7 +97,15 @@
         "type": "secret",
         "required": true,
         "placeholder": "好きなパスワード",
-        "help": "管理サイト（Worker URL）へログインするためのパスワードです。自分で分かる値を設定してください。"
+        "help": "管理サイト（https://<Worker URL>/）へログインするためのパスワードです。自分で分かる値を設定してください。"
+      },
+      {
+        "key": "WEB_PUBLIC_URL",
+        "label": "管理サイトURL（任意）",
+        "type": "url",
+        "required": false,
+        "placeholder": "空欄ならWorker URLをそのまま使用",
+        "help": "管理サイトはこのWorker自身が配信します。通常は空欄のままで構いません。独自ドメインで管理サイトを公開する場合のみ、そのHTTPS URLを入力してください（/dashboardコマンドとOAuth後の戻り先に使います）。"
       }
     ],
     "discord": {
@@ -191,12 +199,14 @@
       ],
       "notes": [
         "1つのDiscord Application / 1つのBOT Tokenで管理機能とSecurity機能を動かします。",
+        "管理サイトも同じWorkerから配信されます（GitHub Pages不要）。管理サイト: https://<Factoryで発行されたWorker URL>/",
         "Security用に別BOTを追加する必要はありません。",
         "SESSION_ENCRYPTION_KEYはDiscordの値ではなくFactory管理の内部暗号鍵です。Discord OAuthトークンをD1へ暗号化保存するために使い、Factoryが再デプロイ時も同じ値を再利用します。",
         "Worker URLは初回デプロイ後に確定するため、Interactions Endpoint URLとOAuth2 Redirect URLはデプロイ後にDiscord Developer Portalへ設定します。",
         "Interactions Endpoint URL: https://<Factoryで発行されたWorker URL>/interactions",
         "OAuth2 Redirect URL: https://<Factoryで発行されたWorker URL>/auth/discord/callback",
-        "Discord側のURL設定後はWorkerの再デプロイは不要です。"
+        "Discord側のURL設定後はWorkerの再デプロイは不要です。",
+        "D1データベース c4sino-admin-db は初回デプロイ時に自動作成され、FactoryがIDを wrangler.jsonc に書き戻します。"
       ]
     }
   }
