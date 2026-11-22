@@ -1,0 +1,12 @@
+# Copy to apps/worker/.dev.vars for `npm run dev:worker` (wrangler dev).
+# In production set these with `wrangler secret put <NAME>` (or Bot-Factory).
+DISCORD_APPLICATION_ID=
+DISCORD_PUBLIC_KEY=
+DISCORD_BOT_TOKEN=
+DISCORD_CLIENT_SECRET=
+# 32 random bytes, base64. Never change it after encrypted data exists.
+SESSION_ENCRYPTION_KEY=
+DASHBOARD_PASSWORD=
+# Optional: override the dashboard URL shown by /dashboard and used after OAuth.
+# Default is the Worker's own origin (the dashboard is served by the Worker).
+# WEB_PUBLIC_URL=

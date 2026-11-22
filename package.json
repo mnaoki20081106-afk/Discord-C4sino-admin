@@ -1,0 +1,19 @@
+{
+  "name": "discord-c4sino-admin",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/web",
+    "apps/worker"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace @dsm/web",
+    "dev:worker": "npm run dev --workspace @dsm/worker",
+    "build": "npm run build --workspaces",
+    "test": "npm test --workspaces",
+    "deploy": "cd apps/worker && npx wrangler deploy"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
