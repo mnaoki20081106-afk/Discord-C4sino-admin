@@ -4552,3 +4552,99 @@ body.dsm-touch-reordering .discord-category {
 .x-generator-manager .x-generator-single {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
+
+/* Channel editor: several text-channel names in one create form. */
+.batch-names {
+  margin-bottom: 16px;
+}
+
+.batch-names-label {
+  display: block;
+  margin-bottom: 7px;
+  color: #8b99b5;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .05em;
+}
+
+.batch-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  border-radius: 9px;
+}
+
+.batch-name-row.dragging {
+  opacity: .45;
+}
+
+.batch-name-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.batch-name-handle {
+  flex: none;
+  width: 18px;
+  color: #56627c;
+  font-size: 13px;
+  line-height: 1;
+  text-align: center;
+  cursor: grab;
+  user-select: none;
+}
+
+.batch-name-handle[draggable="false"] {
+  cursor: default;
+  opacity: .35;
+}
+
+.batch-name-index {
+  flex: none;
+  min-width: 18px;
+  color: #6f7c97;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.batch-name-btn {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #29334a;
+  border-radius: 8px;
+  color: #9aa7c1;
+  background: #101827;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.batch-name-btn:hover:not(:disabled) {
+  color: #fff;
+  border-color: #425071;
+}
+
+.batch-name-btn:disabled {
+  opacity: .35;
+  cursor: default;
+}
+
+.batch-name-btn.add {
+  color: #7fd6a8;
+}
+
+.batch-name-btn.remove {
+  color: #f08a8a;
+}
+
+.batch-names .muted {
+  display: block;
+  margin-top: 4px;
+  font-size: 10px;
+  line-height: 1.5;
+}

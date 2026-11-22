@@ -1865,3 +1865,81 @@ test('console: channels from another guild are refused and text topics keep the 
   const patch=calls.filter(c=>c.method==='PATCH'&&c.path===`/api/v10/channels/${chatChannelId}`).at(-1);
   assert.equal(patch.body.topic.length,1024,'text channel topics are cut to Discord\'s 1024 limit');
 });
+
+test('channel editor: text channels are batch-created in order below the existing ones', async t => {
+  const categoryId='323456789012345678';
+  const otherCategoryId='333456789012345678';
+  let nextId=100;
+  let failOnName=null;
+  let channels=[
+    {id:categoryId,name:'General',type:4,position:0},
+    {id:otherCategoryId,name:'Other',type:4,position:1},
+    {id:chatChannelId,name:'chat',type:0,parent_id:categoryId,position:3,permission_overwrites:[]},
+    {id:'433456789012345678',name:'rules',type:0,parent_id:categoryId,position:7,permission_overwrites:[]},
+    {id:'443456789012345678',name:'voice',type:2,parent_id:categoryId,position:9,permission_overwrites:[]}
+  ];
+  const {mf,calls}=await runtime(t,{outbound:async(request,url,calls)=>{
+    if(request.method==='POST'&&url.pathname===`/api/v10/guilds/${guildId}/channels`){
+      const body=await request.clone().json();
+      calls[calls.length-1].body=body;
+      if(body.name===failOnName) return Response.json({code:50013,message:'Missing Permissions'},{status:403});
+      const channel={id:String(900000000000000000+nextId++),permission_overwrites:[],...body};
+      channels=[...channels,channel];
+      return Response.json(channel);
+    }
+    if(request.method==='GET'&&url.pathname===`/api/v10/guilds/${guildId}/channels`){
+      return Response.json(channels);
+    }
+    return null;
+  }});
+  const login=await request(mf,'/api/login',null,'POST',{password:'local-test-password'});
+  const token=login.body.token;
+  const posts=()=>calls.filter(c=>c.method==='POST'&&c.path===`/api/v10/guilds/${guildId}/channels`);
+
+  const ok=await request(mf,`/api/guilds/${guildId}/channels/batch`,token,'POST',{
+    names:['  お知らせ ','雑談','質問'],parentId:categoryId
+  });
+  assert.equal(ok.status,200,JSON.stringify(ok.body));
+  assert.deepEqual(ok.body.created.map(c=>c.name),['お知らせ','雑談','質問']);
+  assert.equal(ok.body.failed,null);
+  const created=posts();
+  assert.deepEqual(created.map(c=>c.body.name),['お知らせ','雑談','質問'],'created in the submitted order');
+  assert.ok(created.every(c=>c.body.type===0&&c.body.parent_id===categoryId));
+  // Above the highest existing text-like position (7); voice (9) is another bucket.
+  assert.deepEqual(created.map(c=>c.body.position),[8,9,10]);
+
+  // A failure stops the batch and reports the rest so the UI can retry them.
+  failOnName='B';
+  const partial=await request(mf,`/api/guilds/${guildId}/channels/batch`,token,'POST',{
+    names:['A','B','C'],parentId:otherCategoryId
+  });
+  assert.equal(partial.status,207,JSON.stringify(partial.body));
+  assert.deepEqual(partial.body.created.map(c=>c.name),['A']);
+  assert.equal(partial.body.failed.name,'B');
+  assert.deepEqual(partial.body.remaining,['C']);
+  assert.equal(posts().filter(c=>c.body.name==='C').length,0,'nothing after the failure is created');
+
+  failOnName='only';
+  const denied=await request(mf,`/api/guilds/${guildId}/channels/batch`,token,'POST',{names:['only'],parentId:categoryId});
+  assert.equal(denied.status,403);
+  assert.match(denied.body.message,/only/);
+
+  const before=posts().length;
+  for(const [body,pattern] of [
+    [{names:[],parentId:categoryId},/1つ以上/],
+    [{names:['ok',''],parentId:categoryId},/2番目/],
+    [{names:['x'.repeat(101)],parentId:categoryId},/1番目/],
+    [{names:Array.from({length:26},(_,i)=>'c'+i),parentId:categoryId},/25件/],
+    [{names:['x'],parentId:chatChannelId},/カテゴリが見つかりません/]
+  ]){
+    const rejected=await request(mf,`/api/guilds/${guildId}/channels/batch`,token,'POST',body);
+    assert.equal(rejected.status,400,JSON.stringify(rejected.body));
+    assert.match(rejected.body.message,pattern);
+  }
+  // Discord caps a category at 50 channels; the category now holds 6 (3 + 3 created).
+  channels=[...channels,...Array.from({length:30},(_,i)=>({id:String(800000000000000000+i),name:'f'+i,type:0,parent_id:categoryId,position:20+i}))];
+  const full=await request(mf,`/api/guilds/${guildId}/channels/batch`,token,'POST',{names:Array.from({length:15},(_,i)=>'n'+i),parentId:categoryId});
+  assert.equal(full.status,400);
+  assert.match(full.body.message,/最大50個です（現在36個）/);
+  assert.equal(posts().length,before,'invalid requests create nothing');
+});

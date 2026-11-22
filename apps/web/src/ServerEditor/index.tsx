@@ -288,6 +288,8 @@ type Selection =
 | { kind: "category"; id: string }
 | { kind: "create"; type: "text" | "voice" | "category" | "forum"; parentId: string | null }
 | null;
+type TextNameRow = { key: number; value: string };
+const CHANNEL_BATCH_LIMIT = 25;
 type Props = {
 guildId: string;
 guildName: string;
@@ -311,6 +313,17 @@ const [parentId, setParentId] = useState("");
 const [createType, setCreateType] = useState<"text" | "voice" | "category" | "forum">("text");
 // Forum tags, edited as comma separated names.
 const [tagsText, setTagsText] = useState("");
+// Text-channel creation accepts several names, created in this order.
+const [textNames, setTextNames] = useState<TextNameRow[]>([{ key: 0, value: "" }]);
+const nameKeySeq = useRef(1);
+const nameInputRefs = useRef(new Map<number, HTMLInputElement>());
+const [focusNameKey, setFocusNameKey] = useState<number | null>(null);
+const [draggingNameKey, setDraggingNameKey] = useState<number | null>(null);
+useEffect(() => {
+if (focusNameKey === null) return;
+nameInputRefs.current.get(focusNameKey)?.focus();
+setFocusNameKey(null);
+}, [focusNameKey, textNames]);
 const [saving, setSaving] = useState(false);
 const [permissionSaving, setPermissionSaving] = useState(false);
 const [permissionSaveFeedback, setPermissionSaveFeedback] = useState<{
@@ -547,6 +560,7 @@ setTagsText("");
 setSelection({ kind: "create", parentId: parent, type });
 setCreateType(type);
 setName("");
+setTextNames([{ key: nameKeySeq.current++, value: "" }]);
 setTopic("");
 setParentId(parent ?? "");
 }
@@ -952,15 +966,111 @@ onError(reason);
 setSaving(false);
 }
 }
+function newNameRow(value = ""): TextNameRow {
+return { key: nameKeySeq.current++, value };
+}
+function addNameRowAfter(index: number) {
+if (textNames.length >= CHANNEL_BATCH_LIMIT) return;
+const row = newNameRow();
+setTextNames((rows) => {
+const next = [...rows];
+next.splice(index + 1, 0, row);
+return next;
+});
+setFocusNameKey(row.key);
+}
+function removeNameRow(key: number) {
+setTextNames((rows) =>
+rows.length > 1 ? rows.filter((row) => row.key !== key) : [{ ...rows[0]!, value: "" }]
+);
+}
+function updateNameRow(key: number, value: string) {
+setTextNames((rows) => rows.map((row) => (row.key === key ? { ...row, value } : row)));
+}
+function moveNameRow(from: number, to: number) {
+setTextNames((rows) => {
+if (from === to || to < 0 || to >= rows.length) return rows;
+const next = [...rows];
+const [row] = next.splice(from, 1);
+next.splice(to, 0, row!);
+return next;
+});
+}
+// Pasting several lines fills one row per line.
+function pasteNames(index: number, event: React.ClipboardEvent<HTMLInputElement>) {
+const lines = event.clipboardData
+.getData("text")
+.split(/\r?\n/)
+.map((line) => line.trim())
+.filter(Boolean);
+if (lines.length < 2) return;
+event.preventDefault();
+setTextNames((rows) => {
+const next = [...rows];
+const current = next[index]!;
+const incoming = current.value.trim() ? lines : lines.slice(1);
+if (!current.value.trim()) next[index] = { ...current, value: lines[0]! };
+const room = Math.max(0, CHANNEL_BATCH_LIMIT - next.length);
+next.splice(index + 1, 0, ...incoming.slice(0, room).map((line) => newNameRow(line)));
+return next;
+});
+}
+
+async function createTextChannels(names: string[]) {
+const result = await api<{
+created: Array<{ id: string; name: string }>;
+failed: { index: number; name: string; message: string } | null;
+remaining: string[];
+}>(
+`/api/guilds/${guildId}/channels/batch`,
+{
+method: "POST",
+body: JSON.stringify({ names, parentId: parentId || null, topic: topic || undefined })
+},
+20_000 + names.length * 6_000
+);
+await onRefresh();
+if (result.failed) {
+// Keep the names that were not created so they can be retried as-is.
+setTextNames([result.failed.name, ...result.remaining].map((value) => newNameRow(value)));
+onError(new Error(
+`${result.created.length}件作成しました。「${result.failed.name}」で失敗したため残り${result.remaining.length + 1}件は未作成です: ${result.failed.message}`
+));
+return;
+}
+setSelection(null);
+setTopic("");
+setParentId("");
+onNotice(`${result.created.length}件のチャンネルを追加しました`);
+}
+
   async function createItem(event: FormEvent) {
 event.preventDefault();
-if (!name.trim()) return;
+if (createType === "text") {
+const names = textNames.map((row) => row.value.trim()).filter(Boolean);
+if (names.length > 1) {
+setSaving(true);
+try {
+await createTextChannels(names);
+} catch (reason) {
+onError(reason);
+} finally {
+setSaving(false);
+}
+return;
+}
+if (names.length === 0) return;
+}
+const singleName = createType === "text"
+? textNames.map((row) => row.value.trim()).find(Boolean) ?? ""
+: name.trim();
+if (!singleName) return;
 setSaving(true);
 try {
 await api(`/api/guilds/${guildId}/channels`, {
 method: "POST",
 body: JSON.stringify({
-name: name.trim(),
+name: singleName,
 type: createType,
 parentId: createType === "category" ? null : parentId || null,
 topic: createType === "text" || createType === "forum" ? topic : undefined,
@@ -1890,6 +2000,76 @@ if (next === "category") setParentId("");
 <option value="category">カテゴリ</option>
 </select>
 </label>
+{createType === "text" ? (
+<div className="batch-names">
+<span className="batch-names-label">
+名前{textNames.length > 1 ? `（${textNames.length}件・この順で作成）` : ""}
+</span>
+{textNames.map((row, index) => (
+<div
+key={row.key}
+className={"batch-name-row" + (draggingNameKey === row.key ? " dragging" : "")}
+onDragOver={(event) => {
+if (draggingNameKey === null) return;
+event.preventDefault();
+const from = textNames.findIndex((item) => item.key === draggingNameKey);
+if (from >= 0 && from !== index) moveNameRow(from, index);
+}}
+onDrop={(event) => event.preventDefault()}
+>
+<span
+className="batch-name-handle"
+draggable={textNames.length > 1}
+title="ドラッグで並び替え"
+aria-hidden="true"
+onDragStart={(event) => {
+event.dataTransfer.effectAllowed = "move";
+event.dataTransfer.setData("text/plain", row.value);
+const rowElement = (event.currentTarget as HTMLElement).parentElement;
+if (rowElement) event.dataTransfer.setDragImage(rowElement, 16, 16);
+setDraggingNameKey(row.key);
+}}
+onDragEnd={() => setDraggingNameKey(null)}
+>
+⋮⋮
+</span>
+<span className="batch-name-index">{index + 1}</span>
+<input
+ref={(element) => {
+if (element) nameInputRefs.current.set(row.key, element);
+else nameInputRefs.current.delete(row.key);
+}}
+autoFocus={index === 0}
+maxLength={100}
+value={row.value}
+aria-label={`チャンネル名 ${index + 1}`}
+onChange={(event) => updateNameRow(row.key, event.target.value)}
+onPaste={(event) => pasteNames(index, event)}
+onKeyDown={(event) => {
+if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+event.preventDefault();
+addNameRowAfter(index);
+}
+}}
+placeholder={index === 0 ? "general" : "チャンネル名"}
+/>
+{textNames.length > 1 && (
+<>
+<button type="button" className="batch-name-btn" title="上へ" aria-label={`${index + 1}番目を上へ`} disabled={index === 0} onClick={() => moveNameRow(index, index - 1)}>↑</button>
+<button type="button" className="batch-name-btn" title="下へ" aria-label={`${index + 1}番目を下へ`} disabled={index === textNames.length - 1} onClick={() => moveNameRow(index, index + 1)}>↓</button>
+</>
+)}
+<button type="button" className="batch-name-btn add" title="下に追加" aria-label={`${index + 1}番目の下に追加`} disabled={textNames.length >= CHANNEL_BATCH_LIMIT} onClick={() => addNameRowAfter(index)}>＋</button>
+{textNames.length > 1 && (
+<button type="button" className="batch-name-btn remove" title="削除" aria-label={`${index + 1}番目を削除`} onClick={() => removeNameRow(row.key)}>×</button>
+)}
+</div>
+))}
+<small className="muted">
+＋で欄を追加（Enterでも追加）。複数行を貼り付けると1行ずつ欄に分かれます。上から順に、カテゴリ内の既存チャンネルの一番下へ追加します（最大{CHANNEL_BATCH_LIMIT}件）。
+</small>
+</div>
+) : (
 <label>
 <span>名前</span>
 <input
@@ -1901,6 +2081,7 @@ onChange={(event) => setName(event.target.value)}
 placeholder={createType === "category" ? "INFORMATION" : "general"}
 />
 </label>
+)}
 {createType !== "category" && (
 <>
 <label>
@@ -1941,7 +2122,11 @@ placeholder="質問, 報告, 雑談"
 </>
 )}
 <button className="primary editor-save" type="submit" disabled={saving}>
-{saving ? "作成中…" : "追加する"}
+{saving
+? "作成中…"
+: createType === "text" && textNames.filter((row) => row.value.trim()).length > 1
+? `${textNames.filter((row) => row.value.trim()).length}件を追加する`
+: "追加する"}
 </button>
 </form>
 )}

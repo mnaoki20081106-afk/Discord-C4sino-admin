@@ -116,6 +116,9 @@ function dashboardUrl(env:Env,origin:string):string{
   return configured||origin.replace(/\/$/,"")+"/";
 }
 
+const CHANNEL_BATCH_LIMIT=25;
+const CATEGORY_CHANNEL_LIMIT=50;
+
 class HttpError extends Error {
   constructor(public status:number,message:string){super(message);}
 }
@@ -2213,6 +2216,83 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
       )
     });
     return json(env,{id:created.id,name:created.name,type:input.type});
+  }
+
+  // Create several text channels in one category, in the given order, below
+  // the channels that already exist there.
+  const channelBatchMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/channels\/batch$/);
+  if(channelBatchMatch&&request.method==="POST"){
+    const guildId=channelBatchMatch[1]!;
+    const input=await bodyObject<{names?:unknown;parentId?:string|null;topic?:string}>(request);
+    const names=Array.isArray(input.names)
+      ?input.names.map(value=>String(value??"").trim())
+      :[];
+    if(names.length===0) throw new HttpError(400,"チャンネル名を1つ以上入力してください");
+    if(names.length>CHANNEL_BATCH_LIMIT) throw new HttpError(400,`一度に作成できるのは${CHANNEL_BATCH_LIMIT}件までです`);
+    const invalidIndex=names.findIndex(name=>!name||name.length>100);
+    if(invalidIndex>=0) throw new HttpError(400,`${invalidIndex+1}番目のチャンネル名が不正です（1〜100文字）`);
+    const topic=input.topic?String(input.topic).slice(0,1024):undefined;
+    await requireGuild(request,env,guildId);
+    // The default 30s maintenance lease from requireGuild is too short for a
+    // long batch; Discord rate limits channel creation.
+    await requireMainSecurityLease(env,guildId,"dashboard_edit",Math.min(180,30+names.length*6));
+
+    const channels=await botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`);
+    const parentId=input.parentId?String(input.parentId):null;
+    if(parentId){
+      const parent=channels.find(channel=>channel.id===parentId);
+      if(!parent||parent.type!==4) throw new HttpError(400,"選択したカテゴリが見つかりません");
+      const children=channels.filter(channel=>channel.parent_id===parentId).length;
+      if(children+names.length>CATEGORY_CHANNEL_LIMIT){
+        throw new HttpError(400,`カテゴリ内のチャンネルは最大${CATEGORY_CHANNEL_LIMIT}個です（現在${children}個）`);
+      }
+    }
+    // Text-like channels (text/announcement/forum/media) share one sort bucket.
+    // Starting above every existing position keeps the new channels below the
+    // existing ones and in the submitted order.
+    const textBucket=new Set([0,5,15,16]);
+    let position=channels
+      .filter(channel=>textBucket.has(channel.type))
+      .reduce((max,channel)=>Math.max(max,channel.position??0),-1)+1;
+    const botOverwrite=[{
+      id:env.DISCORD_APPLICATION_ID.trim(),
+      type:1,
+      allow:BOT_CHANNEL_GUARD_MASK.toString()
+    }];
+
+    const created:Array<{id:string;name:string}>=[];
+    for(const name of names){
+      try{
+        const channel=await createGuildChannel(env,guildId,"text",{
+          method:"POST",
+          body:JSON.stringify({
+            name,
+            type:0,
+            parent_id:parentId||undefined,
+            position,
+            topic,
+            ...(parentId?{}:{permission_overwrites:botOverwrite})
+          })
+        });
+        created.push({id:channel.id,name:channel.name});
+        position++;
+      }catch(error){
+        // Stop at the first failure so the created channels stay in order.
+        // Already-created channels are reported, not rolled back.
+        const message=
+          error instanceof DiscordApiError&&error.status===403
+            ?"BOTにこの操作の権限がありません"
+            :error instanceof Error?error.message.slice(0,200):String(error);
+        return json(env,{
+          error:created.length?undefined:"request_error",
+          message:`「${name}」の作成に失敗しました: ${message}`,
+          created,
+          failed:{index:created.length,name,message},
+          remaining:names.slice(created.length+1)
+        },created.length?207:(error instanceof DiscordApiError&&error.status===403?403:502));
+      }
+    }
+    return json(env,{created,failed:null,remaining:[]});
   }
 
   const channelReorderMatch=url.pathname.match(/^\/api\/guilds\/(\d+)\/channels\/reorder$/);
