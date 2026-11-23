@@ -587,7 +587,12 @@ export async function handleIntegratedSecurityRequest(
   };
   const bodyText = request.method === "GET" ? "" : await request.text();
   await ensureSchema(integratedEnv);
-  await ensureDiscordSecurityGateway(integratedEnv);
+  // Waking the Gateway Durable Object is best-effort. Leases, settings and
+  // repairs live in D1, so an unavailable Gateway (e.g. the Durable Objects
+  // free-tier duration limit) must not break dashboard saves or tickets.
+  await ensureDiscordSecurityGateway(integratedEnv).catch(error => {
+    console.error("integrated security gateway unavailable", error instanceof Error ? error.message : String(error));
+  });
   try {
     return await handleInternal(request, integratedEnv, bodyText);
   } catch (error) {

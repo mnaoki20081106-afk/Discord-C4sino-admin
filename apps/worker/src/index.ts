@@ -59,6 +59,7 @@ import {
   handleBackupApi,
   handleRecoveryOAuth,
   upgradeTrackedVerificationPanel,
+  verificationPublicOrigin,
   verificationPanelPayload
 } from "./backup";
 import { recordPanelDeployment } from "./backup-db";
@@ -969,7 +970,7 @@ async function publishVerificationPanel(
   env:Env,guildId:string,channelId:string,workerOrigin:string
 ){
   const message=await sendPanelMessage(
-    env,guildId,channelId,verificationPanelPayload(workerOrigin,guildId)
+    env,guildId,channelId,verificationPanelPayload(verificationPublicOrigin(env,workerOrigin),guildId)
   );
   await recordPanelDeployment(env,{
     guildId,kind:"verification",channelId,messageId:message.id??null
@@ -3071,35 +3072,52 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
         parentId?:string|null;
         availableTags?:string[];
       }>(request);
+      // Discord limits name/topic edits to 2 per channel per 10 minutes, so only
+      // fields that differ from Discord's current state are sent (Discord-Bot
+      // bc1f445). The guild channel list is used instead of /channels/:id,
+      // which returns Missing Access when View Channel is denied (06e281f), and
+      // it also confirms the channel belongs to this server.
+      const current=(await botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`))
+        .find(channel=>channel.id===channelId);
+      if(!current) throw new HttpError(404,"チャンネルが見つかりません。一覧を再読み込みしてください");
+      const forumLike=current.type===15||current.type===16;
       const payload:Record<string,unknown>={};
       if(input.name!==undefined){
         const name=input.name.trim();
         if(!name||name.length>100) throw new HttpError(400,"チャンネル名が不正です");
-        payload.name=name;
+        if(name!==current.name) payload.name=name;
       }
       if(input.topic!==undefined){
         // Discord: forum/media guidelines allow 4096 characters, other topics 1024.
-        let limit=1024;
-        const topic=input.topic===null?null:String(input.topic);
-        if(topic&&topic.length>1024){
-          const current=await botJson<DiscordChannel>(env,`/channels/${channelId}`);
-          if(current.type===15||current.type===16) limit=4096;
-        }
-        payload.topic=topic===null?null:topic.slice(0,limit);
+        const limit=forumLike?4096:1024;
+        const topic=input.topic===null?null:String(input.topic).slice(0,limit);
+        if((topic??"")!==(current.topic??"")) payload.topic=topic;
       }
-      if(input.parentId!==undefined) payload.parent_id=input.parentId||null;
+      if(input.parentId!==undefined&&(input.parentId||null)!==(current.parent_id??null)){
+        payload.parent_id=input.parentId||null;
+      }
       if(input.availableTags!==undefined){
         // Keep id/emoji/moderated of tags that still exist so posts keep their tags.
-        const current=await botJson<DiscordChannel>(env,`/channels/${channelId}`);
-        if(current.type!==15&&current.type!==16) throw new HttpError(400,"タグはフォーラムチャンネルでのみ設定できます");
-        const existing=new Map((current.available_tags??[]).map(tag=>[tag.name,tag]));
-        payload.available_tags=forumTagNames(input.availableTags).map(tagName=>{
-          const tag=existing.get(tagName);
-          return tag?{id:tag.id,name:tag.name,moderated:tag.moderated??false,emoji_id:tag.emoji_id??null,emoji_name:tag.emoji_name??null}:{name:tagName};
-        });
+        if(!forumLike) throw new HttpError(400,"タグはフォーラムチャンネルでのみ設定できます");
+        const names=forumTagNames(input.availableTags);
+        const currentNames=(current.available_tags??[]).map(tag=>tag.name);
+        if(names.join("\n")!==currentNames.join("\n")){
+          const existing=new Map((current.available_tags??[]).map(tag=>[tag.name,tag]));
+          payload.available_tags=names.map(tagName=>{
+            const tag=existing.get(tagName);
+            return tag?{id:tag.id,name:tag.name,moderated:tag.moderated??false,emoji_id:tag.emoji_id??null,emoji_name:tag.emoji_name??null}:{name:tagName};
+          });
+        }
       }
       if(Object.keys(payload).length===0){
-        throw new HttpError(400,"変更内容がありません");
+        return json(env,{
+          id:current.id,
+          name:current.name,
+          parentId:current.parent_id??null,
+          topic:current.topic??"",
+          position:current.position??0,
+          unchanged:true
+        });
       }
       let updated:DiscordChannel;
       try{

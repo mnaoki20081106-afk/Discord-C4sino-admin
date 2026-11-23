@@ -106,6 +106,15 @@
         "required": false,
         "placeholder": "空欄ならWorker URLをそのまま使用",
         "help": "管理サイトはこのWorker自身が配信します。通常は空欄のままで構いません。独自ドメインで管理サイトを公開する場合のみ、そのHTTPS URLを入力してください（/dashboardコマンドとOAuth後の戻り先に使います）。"
+      },
+      {
+        "key": "DISCORD_OAUTH_REDIRECT_URI",
+        "label": "認証OAuthのRedirect URL（任意）",
+        "type": "url",
+        "required": false,
+        "pattern": "^https://[^\\s/]+/auth/discord/callback$",
+        "placeholder": "https://c4sino-admin.<subdomain>.workers.dev/auth/discord/callback",
+        "help": "通常は空欄で構いません。設定すると、認証パネルとOAuthのトークン交換が常にこのURLを使います（プレビューURLや別ドメインから開いても同じURL）。Discord Developer Portal > OAuth2 > Redirects に完全一致で登録したURLを入力してください。"
       }
     ],
     "discord": {

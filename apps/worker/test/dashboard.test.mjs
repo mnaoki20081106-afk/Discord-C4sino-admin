@@ -45,7 +45,8 @@ async function runtime(t, options = {}) {
       DISCORD_BOT_TOKEN: 'local-test-token', DISCORD_APPLICATION_ID: botId,
       DISCORD_PUBLIC_KEY: discordPublicKey,
       DASHBOARD_PASSWORD: 'local-test-password', SESSION_ENCRYPTION_KEY: 'local-test-key-not-for-production',
-      WEB_ORIGIN: 'https://dashboard.example', WEB_PUBLIC_URL: 'https://dashboard.example/', PAYPAY_ENV: 'sandbox'
+      WEB_ORIGIN: 'https://dashboard.example', WEB_PUBLIC_URL: 'https://dashboard.example/', PAYPAY_ENV: 'sandbox',
+      ...(options.discordOAuthRedirectUri ? {DISCORD_OAUTH_REDIRECT_URI: options.discordOAuthRedirectUri} : {})
     },
     outboundService: async request => {
       const url = new URL(request.url);
@@ -980,6 +981,41 @@ test('verification panel oauth stores recovery access before assigning the role'
     'verification',
     'legacy recovery links must use the unified verification flow'
   );
+});
+
+test('verification uses a canonical callback on preview domains and panel links', async t => {
+  const redirect='https://canonical-worker.example/auth/discord/callback';
+  const {mf,calls} = await runtime(t,{discordOAuthRedirectUri:redirect});
+  const login=await request(mf,'/api/login',null,'POST',{password:'local-test-password'});
+  assert.equal(login.status,200);
+  const saved=await request(mf,`/api/guilds/${guildId}/settings`,login.body.token,'PUT',{
+    verifiedRoleId:targetRoleId,minAccountAgeDays:0
+  });
+  assert.equal(saved.status,200,JSON.stringify(saved.body));
+  const panel=await request(mf,`/api/guilds/${guildId}/verification/panel`,login.body.token,'POST',{
+    channelId:chatChannelId
+  });
+  assert.equal(panel.status,200,JSON.stringify(panel.body));
+  const panelPost=calls.find(call=>call.method==='POST'&&call.path===`/api/v10/channels/${chatChannelId}/messages`);
+  assert.equal(
+    new URL(panelPost.body.components[0].components[0].url).origin,
+    'https://canonical-worker.example'
+  );
+
+  const started=await mf.dispatchFetch(
+    `https://preview-worker.example/auth/verification/start?guild_id=${guildId}`,
+    {redirect:'manual'}
+  );
+  assert.equal(started.status,302);
+  const authUrl=new URL(started.headers.get('location'));
+  assert.equal(authUrl.searchParams.get('redirect_uri'),redirect);
+  const state=authUrl.searchParams.get('state');
+  const callback=await mf.dispatchFetch(
+    `https://preview-worker.example/auth/discord/callback?code=ok&state=${encodeURIComponent(state)}`
+  );
+  assert.equal(callback.status,200,await callback.clone().text());
+  const exchange=calls.find(call=>call.method==='POST'&&call.path==='/api/v10/oauth2/token');
+  assert.equal(exchange.body.redirect_uri,redirect);
 });
 
 test('cancelled discord verification consumes state without registering', async t => {
@@ -2007,6 +2043,9 @@ test('channel editor: rename rate limit fails fast with the wait time instead of
   const categoryId='720000000000000001';
   let mode='long';
   const {mf,calls}=await runtime(t,{outbound:async(request,url,calls)=>{
+    if(url.pathname===`/api/v10/guilds/${guildId}/channels`&&request.method==='GET'){
+      return Response.json([{id:categoryId,name:'旧名',type:4,position:0}]);
+    }
     if(url.pathname===`/api/v10/channels/${categoryId}`&&request.method==='PATCH'){
       calls[calls.length-1].body=await request.clone().json();
       if(mode==='long') return Response.json({message:'You are being rate limited.',retry_after:312.5,global:false},{status:429});
@@ -2033,9 +2072,11 @@ test('channel editor: rename rate limit fails fast with the wait time instead of
   assert.equal(ok.status,200,JSON.stringify(ok.body));
   assert.equal(patches(),3);
 
-  const empty=await request(mf,`/api/guilds/${guildId}/channels/${categoryId}`,token,'PATCH',{});
-  assert.equal(empty.status,400);
-  assert.equal(patches(),3,'an empty edit never reaches Discord');
+  // Fields equal to Discord's current state are not sent (upstream bc1f445).
+  const same=await request(mf,`/api/guilds/${guildId}/channels/${categoryId}`,token,'PATCH',{name:'旧名'});
+  assert.equal(same.status,200,JSON.stringify(same.body));
+  assert.equal(same.body.unchanged,true);
+  assert.equal(patches(),3,'an unchanged rename never reaches Discord');
 });
 
 test('tickets: the configured category is validated, saved and used for new ticket channels', async t => {
