@@ -915,7 +915,8 @@ async function discordMeta(env:Env,guildId:string){
       }),
     categories:channels
       .filter(c=>c.type===4)
-      .sort((a,b)=>(a.position??0)-(b.position??0))
+      // Same tie-break as Discord's own display (position, then id).
+      .sort((a,b)=>(a.position??0)-(b.position??0)||(BigInt(a.id)<BigInt(b.id)?-1:BigInt(a.id)>BigInt(b.id)?1:0))
       .map(c=>({
         id:c.id,
         name:c.name,
@@ -2313,16 +2314,55 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     const source=channels.find(channel=>channel.id===input.id);
     if(!source) throw new HttpError(404,"移動するチャンネルが見つかりません");
 
-    // Keep the existing desktop category reorder behavior.
     if(source.type===4){
-      if(!Number.isInteger(input.position)){
+      // Categories: rewrite the complete category order (0..n-1). Discord
+      // category positions are often sparse or duplicated, so sending only the
+      // moved category's position can tie with its neighbour and not move it.
+      const byPosition=(a:DiscordChannel,b:DiscordChannel)=>
+        (a.position??0)-(b.position??0)||(BigInt(a.id)<BigInt(b.id)?-1:BigInt(a.id)>BigInt(b.id)?1:0);
+      const ordered=channels.filter(channel=>channel.type===4).sort(byPosition);
+      const fromIndex=ordered.findIndex(channel=>channel.id===source.id);
+      let target:DiscordChannel|undefined;
+      let after:boolean;
+      if(input.targetId){
+        target=ordered.find(channel=>channel.id===input.targetId);
+        if(!target) throw new HttpError(400,"移動先カテゴリが見つかりません");
+        after=input.placement==="after";
+      }else if(Number.isInteger(input.position)){
+        // Legacy payload: the target category's current position.
+        target=ordered.find(channel=>channel.id!==source.id&&(channel.position??0)===input.position);
+        if(!target) throw new HttpError(400,"カテゴリの並び替え位置が不正です");
+        after=ordered.indexOf(target)>fromIndex;
+      }else{
         throw new HttpError(400,"カテゴリの並び替え位置が不正です");
       }
-      await botJson(env,`/guilds/${guildId}/channels`,{
-        method:"PATCH",
-        body:JSON.stringify([{id:source.id,position:input.position}])
-      });
-      return json(env,{ok:true,kind:"category"});
+      if(target.id===source.id) return json(env,{ok:true,kind:"category",unchanged:true});
+
+      const desired=ordered.filter(channel=>channel.id!==source.id);
+      desired.splice(desired.indexOf(target)+(after?1:0),0,source);
+      const desiredIds=desired.map(channel=>channel.id);
+      const patchOrder=async(ids:string[])=>{
+        await botJson(env,`/guilds/${guildId}/channels`,{
+          method:"PATCH",
+          body:JSON.stringify(ids.map((id,position)=>({id,position})))
+        });
+      };
+      const readOrder=async()=>(await botJson<DiscordChannel[]>(env,`/guilds/${guildId}/channels`))
+        .filter(channel=>channel.type===4)
+        .sort(byPosition)
+        .map(channel=>channel.id);
+
+      await patchOrder(desiredIds);
+      // Read back and verify before reporting success; retry once.
+      let actual=await readOrder();
+      if(actual.join()!==desiredIds.join()){
+        await patchOrder(desiredIds);
+        actual=await readOrder();
+        if(actual.join()!==desiredIds.join()){
+          throw new HttpError(502,"Discord側でカテゴリの並び順を反映できませんでした。再読み込みして確認してください");
+        }
+      }
+      return json(env,{ok:true,kind:"category",order:actual});
     }
 
     let destinationParent: string|null;

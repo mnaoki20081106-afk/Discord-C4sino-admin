@@ -1943,3 +1943,62 @@ test('channel editor: text channels are batch-created in order below the existin
   assert.match(full.body.message,/最大50個です（現在36個）/);
   assert.equal(posts().length,before,'invalid requests create nothing');
 });
+
+test('channel editor: category reorder rewrites the full order and verifies it', async t => {
+  // Real servers often have duplicated category positions; Discord then
+  // orders ties by id. Moving by a single position value cannot break a tie.
+  const A='710000000000000001',B='710000000000000002',C='710000000000000003';
+  let categories=[{id:A,name:'A',type:4,position:0},{id:B,name:'B',type:4,position:0},{id:C,name:'C',type:4,position:0}];
+  let ignorePatches=0;
+  const discordOrder=()=>[...categories].sort((x,y)=>x.position-y.position||(BigInt(x.id)<BigInt(y.id)?-1:1)).map(c=>c.name).join('');
+  const {mf,calls}=await runtime(t,{outbound:async(request,url,calls)=>{
+    if(url.pathname===`/api/v10/guilds/${guildId}/channels`){
+      if(request.method==='GET') return Response.json(categories);
+      if(request.method==='PATCH'){
+        const body=await request.clone().json();
+        calls[calls.length-1].body=body;
+        if(ignorePatches>0){ignorePatches--;return new Response(null,{status:204});}
+        for(const item of body){
+          const category=categories.find(c=>c.id===item.id);
+          if(category) category.position=item.position;
+        }
+        return new Response(null,{status:204});
+      }
+    }
+    return null;
+  }});
+  const login=await request(mf,'/api/login',null,'POST',{password:'local-test-password'});
+  const token=login.body.token;
+  const move=body=>request(mf,`/api/guilds/${guildId}/channels/reorder`,token,'PATCH',body);
+
+  const meta=await request(mf,`/api/guilds/${guildId}/meta`,token);
+  assert.deepEqual(meta.body.categories.map(c=>c.name),['A','B','C'],'editor shows the Discord order');
+
+  let res=await move({id:C,targetId:A,placement:'before'});
+  assert.equal(res.status,200,JSON.stringify(res.body));
+  assert.equal(discordOrder(),'CAB');
+  const patch=calls.filter(c=>c.method==='PATCH').at(-1).body;
+  assert.deepEqual(patch,[{id:C,position:0},{id:A,position:1},{id:B,position:2}]);
+
+  res=await move({id:C,targetId:B,placement:'after'});
+  assert.equal(res.status,200);
+  assert.equal(discordOrder(),'ABC');
+
+  // Legacy payload (target category's position) still works.
+  res=await move({id:A,position:2});
+  assert.equal(res.status,200,JSON.stringify(res.body));
+  assert.equal(discordOrder(),'BCA');
+
+  // A PATCH Discord silently ignores is retried once, then reported.
+  ignorePatches=1;
+  res=await move({id:A,targetId:B,placement:'before'});
+  assert.equal(res.status,200);
+  assert.equal(discordOrder(),'ABC');
+  ignorePatches=2;
+  res=await move({id:C,targetId:A,placement:'before'});
+  assert.equal(res.status,502);
+  assert.equal(discordOrder(),'ABC');
+
+  res=await move({id:A,targetId:'799999999999999999',placement:'before'});
+  assert.equal(res.status,400);
+});

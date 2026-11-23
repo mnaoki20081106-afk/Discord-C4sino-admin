@@ -1145,7 +1145,7 @@ setSaving(false);
 setDragging(null);
 }
 }
-async function reorderCategory(id: string, position: number) {
+async function reorderCategory(id: string, targetId: string, placement: "before" | "after") {
 setSaving(true);
 setReorderFeedback({
 kind: "saving",
@@ -1154,7 +1154,7 @@ message: "カテゴリの並び順を反映中…"
 try {
 await api(`/api/guilds/${guildId}/channels/reorder`, {
 method: "PATCH",
-body: JSON.stringify({ id, position })
+body: JSON.stringify({ id, targetId, placement })
 });
 await onRefresh();
 setReorderFeedback({
@@ -1198,7 +1198,7 @@ function moveCategoryBy(category: ServerEditorMeta["categories"][number], delta:
 const index = meta.categories.findIndex((item) => item.id === category.id);
 const target = meta.categories[index + delta];
 if (!target) return;
-void reorderCategory(category.id, target.position ?? index + delta);
+void reorderCategory(category.id, target.id, delta < 0 ? "before" : "after");
 }
 function dropOnChannel(target: ServerEditorMeta["channels"][number]) {
 if (!dragging || dragging.kind !== "channel" || dragging.id === target.id) {
@@ -1214,7 +1214,11 @@ function dropOnCategory(target: ServerEditorMeta["categories"][number]) {
 if (!dragging) return;
 if (dragging.kind === "category") {
 if (dragging.id !== target.id) {
-        void reorderCategory(dragging.id, target.position ?? 0);
+        // Dropping onto a category takes its place: below it when moving down,
+        // above it when moving up.
+        const from = meta.categories.findIndex((item) => item.id === dragging.id);
+        const to = meta.categories.findIndex((item) => item.id === target.id);
+        void reorderCategory(dragging.id, target.id, from < to ? "after" : "before");
 } else {
 setDragging(null);
 }
