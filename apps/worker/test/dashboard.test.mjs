@@ -2002,3 +2002,38 @@ test('channel editor: category reorder rewrites the full order and verifies it',
   res=await move({id:A,targetId:'799999999999999999',placement:'before'});
   assert.equal(res.status,400);
 });
+
+test('channel editor: rename rate limit fails fast with the wait time instead of timing out', async t => {
+  const categoryId='720000000000000001';
+  let mode='long';
+  const {mf,calls}=await runtime(t,{outbound:async(request,url,calls)=>{
+    if(url.pathname===`/api/v10/channels/${categoryId}`&&request.method==='PATCH'){
+      calls[calls.length-1].body=await request.clone().json();
+      if(mode==='long') return Response.json({message:'You are being rate limited.',retry_after:312.5,global:false},{status:429});
+      if(mode==='short'){mode='ok';return Response.json({message:'You are being rate limited.',retry_after:0.05,global:false},{status:429});}
+      return Response.json({id:categoryId,name:'新しい名前',type:4,position:0});
+    }
+    return null;
+  }});
+  const login=await request(mf,'/api/login',null,'POST',{password:'local-test-password'});
+  const token=login.body.token;
+  const patches=()=>calls.filter(c=>c.method==='PATCH'&&c.path===`/api/v10/channels/${categoryId}`).length;
+
+  const started=Date.now();
+  const limited=await request(mf,`/api/guilds/${guildId}/channels/${categoryId}`,token,'PATCH',{name:'新しい名前'});
+  assert.ok(Date.now()-started<5000,'answers well inside the dashboard 20s timeout');
+  assert.equal(limited.status,429);
+  assert.match(limited.body.message,/10分間に2回/);
+  assert.match(limited.body.message,/約6分後/);
+  assert.equal(patches(),1,'a multi-minute wait is not retried inline');
+
+  // Short waits are still retried transparently.
+  mode='short';
+  const ok=await request(mf,`/api/guilds/${guildId}/channels/${categoryId}`,token,'PATCH',{name:'新しい名前'});
+  assert.equal(ok.status,200,JSON.stringify(ok.body));
+  assert.equal(patches(),3);
+
+  const empty=await request(mf,`/api/guilds/${guildId}/channels/${categoryId}`,token,'PATCH',{});
+  assert.equal(empty.status,400);
+  assert.equal(patches(),3,'an empty edit never reaches Discord');
+});

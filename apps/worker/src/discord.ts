@@ -54,7 +54,17 @@ export type DiscordRole={
 };
 
 export class DiscordApiError extends Error {
-  constructor(public status:number, message:string){ super(message); }
+  constructor(public status:number, message:string, public retryAfterMs?:number){ super(message); }
+}
+
+// Waits up to this long are retried inside the request. Longer ones (e.g.
+// Discord's 2-per-10-minutes channel rename limit) fail fast with the wait time
+// instead of holding the request open past the dashboard's timeout.
+const MAX_INLINE_RETRY_MS=5_000;
+
+export function waitText(ms:number):string{
+  const seconds=Math.max(1,Math.ceil(ms/1000));
+  return seconds<60?`約${seconds}秒`:`約${Math.ceil(seconds/60)}分`;
 }
 
 export async function botFetch(
@@ -114,11 +124,18 @@ export async function botJson<T>(
         if(Number.isFinite(seconds)) retryAfterMs=Math.max(100,Math.ceil(seconds*1000));
       }
 
+      if(retryAfterMs>MAX_INLINE_RETRY_MS){
+        throw new DiscordApiError(
+          429,
+          `Discord APIのレート制限中です。${waitText(retryAfterMs)}後に再試行してください`,
+          retryAfterMs
+        );
+      }
       if(attempt<2){
         await new Promise(resolve=>setTimeout(resolve,retryAfterMs+50));
         continue;
       }
-      throw new DiscordApiError(429, "Discord APIのレート制限中です。少し待って再試行してください");
+      throw new DiscordApiError(429, "Discord APIのレート制限中です。少し待って再試行してください", retryAfterMs);
     }
 
     if(!response.ok){

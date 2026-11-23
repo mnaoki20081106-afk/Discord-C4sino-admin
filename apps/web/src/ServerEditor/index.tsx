@@ -919,18 +919,23 @@ detail:
 // That removes an unnecessary Discord round trip and the old 20s timeout
 // path from the common permission-edit workflow.
 if (metadataChanged) {
-const body =
-selection.kind === "category"
-? { name: name.trim() }
-: {
-name: name.trim(),
-parentId: parentId || null,
-...(channel &&
-["text", "announcement", "forum", "media"].includes(channel.type ?? "text")
-? { topic }
-: {}),
-...(channel && isForumLike(channel.type) ? { availableTags: parseTags(tagsText) } : {})
-};
+// Send only what changed: Discord allows 2 name/topic edits per channel
+// per 10 minutes, so an unchanged name must not use up that budget.
+const body: Record<string, unknown> = {};
+if (selection.kind === "category") {
+body.name = name.trim();
+} else if (channel) {
+if (name.trim() !== channel.name) body.name = name.trim();
+if ((parentId || null) !== (channel.parentId || null)) body.parentId = parentId || null;
+if (
+["text", "announcement", "forum", "media"].includes(channel.type ?? "text") &&
+topic !== (channel.topic ?? "")
+) body.topic = topic;
+if (
+isForumLike(channel.type) &&
+parseTags(tagsText).join("\n") !== (channel.availableTags ?? []).join("\n")
+) body.availableTags = parseTags(tagsText);
+}
 await api(`/api/guilds/${guildId}/channels/${selection.id}`, {
 method: "PATCH",
 body: JSON.stringify(body)

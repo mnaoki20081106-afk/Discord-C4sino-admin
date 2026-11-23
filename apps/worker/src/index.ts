@@ -35,6 +35,7 @@ import {
 } from "./db";
 import {
   DiscordApiError,
+  waitText,
   botFetch,
   botJson,
   canManageGuild,
@@ -3068,10 +3069,30 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
           return tag?{id:tag.id,name:tag.name,moderated:tag.moderated??false,emoji_id:tag.emoji_id??null,emoji_name:tag.emoji_name??null}:{name:tagName};
         });
       }
-      const updated=await botJson<DiscordChannel>(env,`/channels/${channelId}`,{
-        method:"PATCH",
-        body:JSON.stringify(payload)
-      });
+      if(Object.keys(payload).length===0){
+        throw new HttpError(400,"変更内容がありません");
+      }
+      let updated:DiscordChannel;
+      try{
+        updated=await botJson<DiscordChannel>(env,`/channels/${channelId}`,{
+          method:"PATCH",
+          body:JSON.stringify(payload)
+        });
+      }catch(error){
+        if(
+          error instanceof DiscordApiError&&
+          error.status===429&&
+          (payload.name!==undefined||payload.topic!==undefined)
+        ){
+          throw new HttpError(
+            429,
+            "Discordの制限で、名前・トピックの変更は同じチャンネル/カテゴリにつき10分間に2回までです。"+
+            (error.retryAfterMs?`${waitText(error.retryAfterMs)}後に`:"しばらくしてから")+
+            "もう一度保存してください"
+          );
+        }
+        throw error;
+      }
       return json(env,{
         id:updated.id,
         name:updated.name,
