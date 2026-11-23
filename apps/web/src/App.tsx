@@ -97,6 +97,7 @@ type ServiceStatus = {
   discordReady: boolean;
   discordUser?: string | null;
   discordError?: string | null;
+  interactionsEndpoint?: { configured: string | null; expected: string; matches: boolean } | null;
   guildCount?: number | null;
   dashboardPasswordConfigured: boolean;
   payPayConfigured: boolean;
@@ -256,6 +257,19 @@ export default function App() {
     setActiveViewState("vending");
     setMenuOpen(false);
     window.scrollTo({ top: 0 });
+  }
+
+  async function syncInteractionsEndpoint() {
+    setBusy(true);
+    try {
+      await api("/api/discord/interactions-endpoint", { method: "POST" }, 30_000);
+      setStatus(await api<ServiceStatus>("/api/status"));
+      flash("DiscordのInteractions Endpoint URLを更新し、保存されたことを確認しました");
+    } catch (reason) {
+      fail(reason);
+    } finally {
+      setBusy(false);
+    }
   }
 
   function flash(message: string) {
@@ -790,6 +804,25 @@ export default function App() {
           {notice && <div className="alert success">{notice}</div>}
           {error && <div className="alert error">{error}</div>}
           {busy && <div className="progress"><span /></div>}
+          {status?.interactionsEndpoint && !status.interactionsEndpoint.matches && (
+            <div className="alert error" role="alert">
+              <strong>DiscordのボタンとコマンドがこのBOTに届いていません。</strong>
+              <br />
+              Discordに保存されているInteractions Endpoint URL: <code>{status.interactionsEndpoint.configured ?? "未設定"}</code>
+              <br />
+              正しいURL: <code>{status.interactionsEndpoint.expected}</code>
+              <div style={{ marginTop: 10 }}>
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={busy}
+                  onClick={() => void syncInteractionsEndpoint()}
+                >
+                  Discordの設定をこのURLに合わせる
+                </button>
+              </div>
+            </div>
+          )}
 
           {!selectedGuild && (
             <section className="empty-state card">

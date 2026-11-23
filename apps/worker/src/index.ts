@@ -1791,10 +1791,22 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
     }catch(error){
       discordError=error instanceof Error?error.message:String(error);
     }
+    // Where Discord sends buttons / slash commands. A stale value (e.g. after
+    // moving the Worker to another Cloudflare account) breaks every interaction.
+    let interactionsEndpoint:{configured:string|null;expected:string;matches:boolean}|null=null;
+    if(discordReady){
+      const application=await botJson<{interactions_endpoint_url?:string|null}>(env,"/applications/@me").catch(()=>null);
+      if(application){
+        const expected=url.origin+"/interactions";
+        const configured=application.interactions_endpoint_url??null;
+        interactionsEndpoint={configured,expected,matches:configured===expected};
+      }
+    }
     return json(env,{
       discordReady,
       discordUser,
       discordError,
+      interactionsEndpoint,
       guildCount:null,
       dashboardPasswordConfigured:Boolean(env.DASHBOARD_PASSWORD),
       payPayConfigured:Boolean(await getPayPay(env,SHOP_PAYPAY_OWNER,env.SESSION_ENCRYPTION_KEY).catch(()=>null)),
@@ -1804,6 +1816,31 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
         `https://discord.com/oauth2/authorize?client_id=${env.DISCORD_APPLICATION_ID}`+
         `&permissions=${BOT_PERMISSIONS}&integration_type=0&scope=bot%20applications.commands`
     });
+  }
+
+  // Point Discord's Interactions Endpoint URL at this Worker using the bot
+  // token (Discord validates it with signed pings before accepting), then read
+  // it back so success is only reported when Discord really stored it.
+  if(url.pathname==="/api/discord/interactions-endpoint"&&request.method==="POST"){
+    await sessionFromRequest(request,env);
+    const expected=url.origin+"/interactions";
+    const before=(await botJson<{interactions_endpoint_url?:string|null}>(env,"/applications/@me")).interactions_endpoint_url??null;
+    if(before!==expected){
+      try{
+        await botJson(env,"/applications/@me",{
+          method:"PATCH",
+          body:JSON.stringify({interactions_endpoint_url:expected})
+        });
+      }catch(error){
+        const detail=error instanceof Error?error.message.slice(0,300):String(error);
+        throw new HttpError(502,"DiscordがInteractions Endpoint URLの変更を受け付けませんでした: "+detail);
+      }
+    }
+    const after=(await botJson<{interactions_endpoint_url?:string|null}>(env,"/applications/@me")).interactions_endpoint_url??null;
+    if(after!==expected){
+      throw new HttpError(502,`Discordに保存されたURLが一致しません（現在: ${after??"未設定"}）`);
+    }
+    return json(env,{ok:true,before,after,changed:before!==expected});
   }
 
   if(url.pathname==="/api/me"&&request.method==="GET"){

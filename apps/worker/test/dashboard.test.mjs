@@ -2155,3 +2155,45 @@ test('health reports the Interactions Endpoint URL that Discord has stored', asy
   health=await (await mf.dispatchFetch('https://worker.example/health')).json();
   assert.equal(health.discord.interactionsEndpointMatches,false);
 });
+
+test('dashboard can point Discord\'s Interactions Endpoint URL at this Worker and verifies it', async t => {
+  let stored='https://old-worker.example/interactions';
+  let reject=false;
+  const {mf,calls}=await runtime(t,{outbound:async(request,url,calls)=>{
+    if(url.pathname==='/api/v10/applications/@me'){
+      if(request.method==='GET') return Response.json({id:botId,interactions_endpoint_url:stored});
+      if(request.method==='PATCH'){
+        const body=await request.clone().json();
+        calls[calls.length-1].body=body;
+        if(reject) return Response.json({code:50035,message:'Invalid Form Body',errors:{interactions_endpoint_url:{_errors:[{code:'APPLICATION_INTERACTIONS_ENDPOINT_URL_INVALID',message:'The specified interactions endpoint url could not be verified.'}]}}},{status:400});
+        stored=body.interactions_endpoint_url;
+        return Response.json({id:botId,interactions_endpoint_url:stored});
+      }
+    }
+    return null;
+  }});
+  const login=await request(mf,'/api/login',null,'POST',{password:'local-test-password'});
+  const token=login.body.token;
+
+  let status=await request(mf,'/api/status',token);
+  assert.deepEqual(status.body.interactionsEndpoint,{configured:'https://old-worker.example/interactions',expected:'https://worker.example/interactions',matches:false});
+
+  assert.equal((await request(mf,'/api/discord/interactions-endpoint',null,'POST')).status,401,'requires a dashboard session');
+
+  reject=true;
+  const rejected=await request(mf,'/api/discord/interactions-endpoint',token,'POST');
+  assert.equal(rejected.status,502);
+  assert.match(rejected.body.message,/受け付けませんでした/);
+
+  reject=false;
+  const synced=await request(mf,'/api/discord/interactions-endpoint',token,'POST');
+  assert.equal(synced.status,200,JSON.stringify(synced.body));
+  assert.equal(synced.body.after,'https://worker.example/interactions');
+  const patch=calls.filter(c=>c.method==='PATCH'&&c.path==='/api/v10/applications/@me').at(-1);
+  assert.deepEqual(patch.body,{interactions_endpoint_url:'https://worker.example/interactions'});
+
+  status=await request(mf,'/api/status',token);
+  assert.equal(status.body.interactionsEndpoint.matches,true);
+  const again=await request(mf,'/api/discord/interactions-endpoint',token,'POST');
+  assert.equal(again.body.changed,false,'already correct: no second PATCH');
+});
