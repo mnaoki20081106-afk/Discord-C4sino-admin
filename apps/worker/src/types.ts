@@ -32,6 +32,7 @@ export type GuildSettings = {
   verifiedRoleId: string | null;
   minAccountAgeDays: number;
   ticketSupportRoleIds: string[];
+  ticketCategoryId: string | null;
   trustedUserIds: string[];
   trustedRoleIds: string[];
 };

@@ -2037,3 +2037,64 @@ test('channel editor: rename rate limit fails fast with the wait time instead of
   assert.equal(empty.status,400);
   assert.equal(patches(),3,'an empty edit never reaches Discord');
 });
+
+test('tickets: the configured category is validated, saved and used for new ticket channels', async t => {
+  const ticketCategoryId='730000000000000001';
+  const userId='330000000000000001';
+  let created=[];
+  let categoryExists=true;
+  const {mf,calls,interactionPrivateKey}=await runtime(t,{outbound:async(request,url,calls)=>{
+    if(url.pathname===`/api/v10/channels/${ticketCategoryId}`&&request.method==='GET'){
+      return Response.json({id:ticketCategoryId,name:'TICKETS',type:4,guild_id:guildId});
+    }
+    if(url.pathname===`/api/v10/channels/${chatChannelId}`&&request.method==='GET'){
+      return Response.json({id:chatChannelId,name:'chat',type:0,guild_id:guildId});
+    }
+    if(url.pathname===`/api/v10/guilds/${guildId}/channels`){
+      if(request.method==='GET') return Response.json([...(categoryExists?[{id:ticketCategoryId,name:'TICKETS',type:4,position:0}]:[]),...created]);
+      if(request.method==='POST'){
+        const body=await request.clone().json();
+        calls[calls.length-1].body=body;
+        const channel={id:String(731000000000000000+created.length),...body};
+        created.push(channel);
+        return Response.json(channel);
+      }
+    }
+    if(/^\/api\/v10\/channels\/731\d+\/messages$/.test(url.pathname)) return Response.json({id:'1'});
+    return null;
+  }});
+  const login=await request(mf,'/api/login',null,'POST',{password:'local-test-password'});
+  const token=login.body.token;
+
+  const wrong=await request(mf,`/api/guilds/${guildId}/settings`,token,'PUT',{ticketCategoryId:chatChannelId});
+  assert.equal(wrong.status,400);
+  assert.match(wrong.body.message,/カテゴリ/);
+  const saved=await request(mf,`/api/guilds/${guildId}/settings`,token,'PUT',{ticketCategoryId});
+  assert.equal(saved.status,200,JSON.stringify(saved.body));
+  assert.equal(saved.body.ticketCategoryId,ticketCategoryId);
+
+  const press=async n=>signedInteraction(mf,interactionPrivateKey,{
+    id:'93000000000000000'+n,application_id:botId,token:'ticket-token-'+n,type:3,guild_id:guildId,
+    member:{user:{id:userId,username:'Customer'}},data:{custom_id:'ticket:create'}
+  });
+  const ack=await press(1);
+  assert.equal(ack.status,200);
+  assert.equal(ack.body.type,5,'the button is acknowledged before any Discord work');
+  const post=await eventually(()=>calls.find(c=>c.method==='POST'&&c.path===`/api/v10/guilds/${guildId}/channels`));
+  assert.ok(post,'ticket channel created');
+  assert.equal(post.body.parent_id,ticketCategoryId);
+  assert.deepEqual(post.body.permission_overwrites.find(o=>o.id===guildId),{id:guildId,type:0,deny:'1024'},'private to @everyone');
+
+  // A deleted category falls back to no parent instead of failing.
+  created=[];
+  categoryExists=false;
+  const before=calls.filter(c=>c.method==='POST'&&c.path===`/api/v10/guilds/${guildId}/channels`).length;
+  assert.equal((await press(2)).body.type,5);
+  const fallback=await eventually(()=>calls.filter(c=>c.method==='POST'&&c.path===`/api/v10/guilds/${guildId}/channels`)[before]);
+  assert.ok(fallback,'ticket still created');
+  assert.equal(fallback.body.parent_id,undefined);
+
+  const cleared=await request(mf,`/api/guilds/${guildId}/settings`,token,'PUT',{ticketCategoryId:null});
+  assert.equal(cleared.status,200);
+  assert.equal(cleared.body.ticketCategoryId,null);
+});

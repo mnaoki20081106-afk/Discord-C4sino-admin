@@ -1461,6 +1461,10 @@ async function createTicketFromInteraction(env:Env,interaction:any):Promise<Resp
     ?roles.filter(role=>configuredIds.includes(role.id))
     :roles.filter(role=>role.name==="Support").slice(0,1);
   const safe=username.toLowerCase().replace(/[^a-z0-9_-]/g,"").slice(0,18)||userId.slice(-6);
+  // A deleted category must not block ticket creation: fall back to no parent.
+  const ticketCategory=settings.ticketCategoryId
+    ?channels.find(channel=>channel.id===settings.ticketCategoryId&&channel.type===4)??null
+    :null;
   const overwrites:Array<Record<string,unknown>>=[
     {id:guildId,type:0,deny:"1024"},
     {id:userId,type:1,allow:(1024n|2048n|65536n|32768n).toString()},
@@ -1480,6 +1484,7 @@ async function createTicketFromInteraction(env:Env,interaction:any):Promise<Resp
       name:`ticket-${safe}`,
       type:0,
       topic,
+      ...(ticketCategory?{parent_id:ticketCategory.id}:{}),
       permission_overwrites:overwrites
     })
   });
@@ -2113,7 +2118,7 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
         }
         safe[key]=value;
       }
-      for(const key of ["verifiedRoleId","logChannelId"] as const){
+      for(const key of ["verifiedRoleId","logChannelId","ticketCategoryId"] as const){
         if(patch[key]===undefined) continue;
         const value=patch[key];
         if(value!==null&&(typeof value!=="string"||!/^\d+$/.test(value.trim()))){
@@ -2151,6 +2156,13 @@ async function handleApi(request:Request,env:Env,url:URL):Promise<Response>{
         // Do not reject the setting based only on Discord's role position values.
         // Discord is authoritative when the role is actually assigned, and equal
         // numeric positions can still have a valid hierarchy order.
+      }
+
+      if(safe.ticketCategoryId){
+        const category=await botJson<DiscordChannel>(env,`/channels/${safe.ticketCategoryId}`).catch(()=>null);
+        if(!category||category.type!==4||(category.guild_id&&category.guild_id!==guildId)){
+          throw new HttpError(400,"チケット作成先にはこのサーバーのカテゴリを選択してください");
+        }
       }
 
       const saved=await saveGuildSettings(env,guildId,safe);

@@ -78,6 +78,7 @@ type Settings = {
   verifiedRoleId: string | null;
   minAccountAgeDays: number;
   ticketSupportRoleIds: string[];
+  ticketCategoryId?: string | null;
   trustedUserIds: string[];
   trustedRoleIds: string[];
 };
@@ -1325,6 +1326,29 @@ export default function App() {
                   </div>
                   </Field>
                   
+                  <Field
+                  label="チケットを作成するカテゴリ"
+                  hint="チケットを開くと、このカテゴリ内に本人・対応者ロール・BOTだけが見られるチャンネルを作ります。変更後は「Ticket設定を保存」を押してください"
+                  >
+                  <select
+                  value={settings.ticketCategoryId ?? ""}
+                  onChange={(event) =>
+                  setSettings({ ...settings, ticketCategoryId: event.target.value || null })
+                  }
+                  >
+                  <option value="">カテゴリなし（サーバーの一番下に作成）</option>
+                  {meta.categories.map((category) => (
+                  <option key={category.id} value={category.id}>
+                  {category.name}
+                  </option>
+                  ))}
+                  {settings.ticketCategoryId &&
+                  !meta.categories.some((category) => category.id === settings.ticketCategoryId) && (
+                  <option value={settings.ticketCategoryId}>（削除されたカテゴリ — カテゴリなしで作成されます）</option>
+                  )}
+                  </select>
+                  </Field>
+
                   <Field
                   label="Ticketパネル設置チャンネル"
                   hint="認証パネルとは別のチャンネルを選べます"
