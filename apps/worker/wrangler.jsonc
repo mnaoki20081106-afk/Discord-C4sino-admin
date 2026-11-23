@@ -24,6 +24,11 @@
       "/health"
     ]
   },
+  // Keep Worker logs (console.log/error, exceptions) so production failures
+  // can be read afterwards in the Cloudflare dashboard / API.
+  "observability": {
+    "enabled": true
+  },
   "durable_objects": {
     "bindings": [
       {
