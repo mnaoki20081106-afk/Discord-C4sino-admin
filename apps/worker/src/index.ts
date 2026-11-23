@@ -3541,12 +3541,22 @@ export default {
         let discordGuildCount:number|null=null;
         let discordApplicationMatchesToken:boolean|null=null;
         let discordApiError:string|null=null;
+        // What Discord itself has stored as the Interactions Endpoint URL, so a
+        // mismatch with this Worker is visible instead of guessed.
+        let interactionsEndpointUrl:string|null=null;
+        let interactionsEndpointError:string|null=null;
         try{
           const bot=await botJson<{id:string;username:string}>(env,"/users/@me");
           discordApiReachable=true;
           discordBotId=bot.id;
           discordBotUsername=bot.username;
           discordApplicationMatchesToken=bot.id===env.DISCORD_APPLICATION_ID.trim();
+          try{
+            const application=await botJson<{interactions_endpoint_url?:string|null}>(env,"/applications/@me");
+            interactionsEndpointUrl=application.interactions_endpoint_url??null;
+          }catch(error){
+            interactionsEndpointError=error instanceof Error?error.message:String(error);
+          }
           // Do not call /users/@me/guilds from health; dashboard bootstrap owns that request.
           // This prevents health checks from consuming the same Discord REST rate-limit bucket.
           discordGuildCount=null;
@@ -3594,6 +3604,12 @@ export default {
             botUsername:discordBotUsername,
             guildCount:discordGuildCount,
             applicationMatchesToken:discordApplicationMatchesToken,
+            interactionsEndpointUrl,
+            expectedInteractionsEndpointUrl:url.origin+"/interactions",
+            interactionsEndpointMatches:interactionsEndpointUrl===null
+              ?null
+              :interactionsEndpointUrl===url.origin+"/interactions",
+            interactionsEndpointError,
             apiError:discordApiError
           },
           encryptionKey:Boolean(env.SESSION_ENCRYPTION_KEY),

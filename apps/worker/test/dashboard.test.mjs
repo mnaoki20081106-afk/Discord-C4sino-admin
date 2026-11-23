@@ -2139,3 +2139,19 @@ test('tickets: the configured category is validated, saved and used for new tick
   assert.equal(cleared.status,200);
   assert.equal(cleared.body.ticketCategoryId,null);
 });
+
+test('health reports the Interactions Endpoint URL that Discord has stored', async t => {
+  let stored='https://worker.example/interactions';
+  const {mf}=await runtime(t,{outbound:async(request,url)=>{
+    if(url.pathname==='/api/v10/applications/@me') return Response.json({id:botId,interactions_endpoint_url:stored});
+    return null;
+  }});
+  let health=await (await mf.dispatchFetch('https://worker.example/health')).json();
+  assert.equal(health.discord.interactionsEndpointUrl,stored);
+  assert.equal(health.discord.expectedInteractionsEndpointUrl,'https://worker.example/interactions');
+  assert.equal(health.discord.interactionsEndpointMatches,true);
+
+  stored='https://old-worker.example/interactions';
+  health=await (await mf.dispatchFetch('https://worker.example/health')).json();
+  assert.equal(health.discord.interactionsEndpointMatches,false);
+});
